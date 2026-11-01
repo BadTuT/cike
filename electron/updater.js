@@ -8,10 +8,11 @@ const { execFile } = require('child_process');
 const { app, shell } = require('electron');
 const { installerNames, compare, pickInstaller } = require('./update-assets');
 
-// Release repository that publishes the installers. Override with
-// LFB_UPDATE_REPO=owner/name when building your own distribution line, so a
-// self-hosted Windows build checks its own releases instead of upstream's.
-const REPO = process.env.LFB_UPDATE_REPO || 'chainfix/cike';
+// Release repository that publishes the installers. This branch ships its own
+// Windows builds, so the default points at this fork; upstream never publishes
+// a Windows asset and a Windows build pointed there could never update itself.
+// Override with LFB_UPDATE_REPO=owner/name to publish from another repository.
+const REPO = process.env.LFB_UPDATE_REPO || 'BadTuT/cike';
 
 function get(url, file) {
   return new Promise((resolve, reject) => {
