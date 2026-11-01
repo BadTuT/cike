@@ -30,7 +30,7 @@
     "dist:win:dir": "electron-builder --win dir --x64"
   },
   "type": "commonjs",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "devDependencies": {
     "electron": "44.10.0",
     "electron-builder": "^26.0.12",
