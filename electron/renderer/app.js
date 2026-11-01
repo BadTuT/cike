@@ -816,21 +816,37 @@ document.getElementById('btn-save-proxy-route').onclick = async () => {
     toast('代理连接设置已保存');
   } catch (e) { toast(e.message, true); }
 };
+const isWindowsShell = window.lfb?.platform === 'win32';
 document.getElementById('btn-check-update').onclick = async () => {
   const status = document.getElementById('update-status');
+  const install = document.getElementById('btn-install-update');
   status.textContent = '正在检查…';
   try {
     const info = await window.lfb.checkUpdate();
-    status.textContent = info.available ? `发现新版本 ${info.latest}（当前 ${info.current}）` : `已是最新版本 ${info.current}`;
-    document.getElementById('btn-install-update').classList.toggle('hidden', !info.available);
+    if (!info.available) {
+      status.textContent = `已是最新版本 ${info.current}`;
+      install.classList.add('hidden');
+      return;
+    }
+    if (!info.installerUrl) {
+      status.textContent = `发现新版本 ${info.latest}，但该版本没有发布${isWindowsShell ? ' Windows ' : ' macOS '}安装包`;
+      install.classList.add('hidden');
+      return;
+    }
+    status.textContent = `发现新版本 ${info.latest}（当前 ${info.current}）`;
+    install.textContent = isWindowsShell ? '打开下载页' : '下载并安装';
+    install.classList.remove('hidden');
   } catch (e) { status.textContent = '检查失败'; toast(e.message, true); }
 };
 document.getElementById('btn-install-update').onclick = async () => {
   const button = document.getElementById('btn-install-update');
   button.disabled = true;
-  document.getElementById('update-status').textContent = '正在下载并安装…';
-  try { await window.lfb.installUpdate(); }
-  catch (e) { button.disabled = false; document.getElementById('update-status').textContent = '安装失败'; toast(e.message, true); }
+  document.getElementById('update-status').textContent = isWindowsShell ? '正在打开发布页…' : '正在下载并安装…';
+  try {
+    const info = await window.lfb.installUpdate();
+    if (info?.manual) document.getElementById('update-status').textContent = info.message;
+  } catch (e) { document.getElementById('update-status').textContent = '安装失败'; toast(e.message, true); }
+  finally { button.disabled = false; }
 };
 document.getElementById('btn-banner-download').onclick = () => { showPage('settings'); startChromiumDownload(); };
 document.getElementById('btn-token-show').onclick = (e) => {
@@ -843,6 +859,9 @@ document.querySelectorAll('[data-copy]').forEach((b) => b.onclick = () => {
   navigator.clipboard.writeText(i.value).then(() => toast('已复制'));
 });
 document.getElementById('btn-open-data').onclick = () => window.lfb.openDataDir();
+window.lfb.dataDir?.().then((r) => {
+  if (r?.ok) document.getElementById('set-data-dir').value = r.dataDir;
+}).catch(() => {});
 
 (async function init() {
   if (!window.lfb?.apiBase) {

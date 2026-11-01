@@ -9,11 +9,13 @@ const connection = ipcRenderer.sendSync('connection-info');
 contextBridge.exposeInMainWorld('lfb', {
   apiBase: connection.apiBase || '',
   token: connection.token || '',
+  platform: process.platform,
   readProxyClipboard: () => ipcRenderer.invoke('proxy-clipboard'),
   chromiumStatus: () => ipcRenderer.invoke('chromium-status'),
   chromiumDownload: () => ipcRenderer.invoke('chromium-download'),
   onChromiumProgress: (cb) => ipcRenderer.on('chromium-download-progress', (_e, p) => cb(p)),
   openDataDir: () => ipcRenderer.invoke('open-data-dir'),
+  dataDir: () => ipcRenderer.invoke('data-dir'),
   checkUpdate: () => ipcRenderer.invoke('update-check'),
   installUpdate: () => ipcRenderer.invoke('update-install'),
 });

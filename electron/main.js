@@ -120,6 +120,7 @@ handle('open-data-dir', async () => {
   shell.openPath(backend.dataDir);
   return { ok: true };
 });
+handle('data-dir', async () => ({ ok: true, dataDir: backend.dataDir }));
 
 handle('proxy-clipboard', async () => {
   try { return { ok: true, proxy: require('../src/proxyparse').parseProxyLine(await clipboard.readText()) }; }
