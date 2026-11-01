@@ -1,0 +1,102 @@
+name: Build and Release Windows x64
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.7.0)'
+        required: true
+        default: '0.7.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Set release version
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "version must be x.y.z" }
+          npm version $env:RELEASE_VERSION --no-git-tag-version --allow-same-version
+
+      - run: npm ci
+
+      # 上游测试套件（security/network/runtime/downloads/environments）按 POSIX 写：
+      # 断言 0700 权限、调用 ps/sips、需要已下载的浏览器，Windows 上必然红。
+      # Windows 分支的回归面在打包与平台分支，用 test:win 覆盖。
+      - name: Run Windows packaging tests
+        run: |
+          node --check electron/chromium.js
+          node --check electron/updater.js
+          node --check electron/update-assets.js
+          node --check electron/zip-extract.js
+          node --check electron/main.js
+          node --check electron/preload.js
+          node --check electron/renderer/app.js
+          npm run test:win
+
+      - name: Check Windows icon
+        shell: pwsh
+        run: |
+          if (-not (Test-Path electron/assets/icon.ico)) { throw 'electron/assets/icon.ico is missing' }
+          $len = (Get-Item electron/assets/icon.ico).Length
+          if ($len -lt 10000) { throw "electron/assets/icon.ico looks truncated ($len bytes)" }
+
+      - name: Build NSIS installer
+        run: npm run dist:win
+
+      - name: Verify and archive
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $app = 'dist-installer/win-unpacked/CIKE.exe'
+          if (-not (Test-Path $app)) { throw "missing $app" }
+          $info = (Get-Item $app).VersionInfo
+          "CIKE.exe $($info.ProductName) $($info.ProductVersion)"
+          if ($info.ProductVersion -notlike "$env:RELEASE_VERSION*") { throw 'packaged version does not match input' }
+          if (-not (Test-Path 'dist-installer/win-unpacked/resources/app.asar')) { throw 'app.asar missing' }
+          $setup = "dist-installer/CIKE-Setup-$env:RELEASE_VERSION-x64.exe"
+          if (-not (Test-Path $setup)) { throw "missing $setup" }
+
+          # zip 根部直接是 CIKE.exe，解压即用，不需要再进一层目录
+          $portable = "CIKE-$env:RELEASE_VERSION-win-x64.zip"
+          Compress-Archive -Path 'dist-installer/win-unpacked/*' -DestinationPath $portable -CompressionLevel Optimal
+          "portable zip: {0:N1} MB" -f ((Get-Item $portable).Length / 1MB)
+
+          $sums = @()
+          foreach ($f in $portable, $setup) {
+            $sums += "$((Get-FileHash $f -Algorithm SHA256).Hash.ToLower())  $(Split-Path $f -Leaf)"
+          }
+          $sums | Out-File -FilePath SHA256SUMS.txt -Encoding ascii
+          Get-Content SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: CIKE v${{ inputs.version }}
+          append_body: true
+          make_latest: true
+          body: |
+            Windows x64 两种包：
+            - `CIKE-Setup-版本号-x64.exe`：向导式安装程序（可改安装目录、建开始菜单/桌面快捷方式、可在「应用和功能」卸载，卸载保留环境数据）。
+            - `CIKE-版本号-win-x64.zip`：免安装，解压后双击 `CIKE.exe`。
+            首次运行如被 SmartScreen 拦截，选择「更多信息 → 仍要运行」。
+            未做代码签名；指纹浏览器内核在设置页一次性下载（约 200 MB）。
+            校验：`SHA256SUMS.txt`。
+          files: |
+            CIKE-*-win-x64.zip
+            CIKE-Setup-*-x64.exe
+            SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
