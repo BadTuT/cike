@@ -1,4 +1,14 @@
 'use strict';
+/**
+ * Chromium kernel installer.
+ *
+ * Downloads the Playwright-pinned builds/cft archive over HTTPS, unpacks it with
+ * a per-platform extractor (see zip-extract.js), verifies the executable and
+ * records the executable path in:
+ *   <dataDir>/browsers/chromium-executable.txt
+ *
+ * Fully self-contained: does not depend on Playwright's internal layout.
+ */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -8,6 +18,7 @@ const { promisify } = require('util');
 const { pipeline } = require('stream/promises');
 const exec = promisify(execFile);
 const { privateDirectory, writePrivate } = require('../src/privatefiles');
+const { extractZip } = require('./zip-extract');
 const inProgress = new Map();
 function chromiumEntry() {
   const file = path.join(path.dirname(require.resolve('playwright-core/package.json')), 'browsers.json');
@@ -25,12 +36,46 @@ function downloadUrl() {
 }
 function browserRoot(dir) { return path.join(dir, 'browsers'); }
 function executableMarker(dir) { return path.join(browserRoot(dir), 'chromium-executable.txt'); }
+
+/** Shell-quote a path for a single-quoted PowerShell string literal. */
+const psQuote = (p) => `'${String(p).replace(/'/g, "''")}'`;
+
+/**
+ * Version of the unpacked kernel.
+ *
+ * macOS and Linux builds print "Chromium <version>" for --version. Windows
+ * chrome.exe is a GUI-subsystem binary: it writes nothing to stdout, and
+ * running it for a version probe can start a browser window. So on Windows the
+ * version is taken from the install path we created
+ * (<dataDir>/browsers/<version>-<suffix>/chrome-win64/chrome.exe), with the PE
+ * version resource as the fallback for a hand-placed executable.
+ */
+async function probeVersion(executable) {
+  if (!executable || !fs.existsSync(executable)) return null;
+  if (process.platform === 'win32') {
+    const fromPath = executable.match(/(\d+\.\d+\.\d+\.\d+)-[^\\/]+[\\/][^\\/]+[\\/]chrome\.exe$/i);
+    if (fromPath) return fromPath[1];
+    try {
+      const script = `(Get-Item -LiteralPath ${psQuote(executable)}).VersionInfo.ProductVersion`;
+      const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 15000, windowsHide: true, maxBuffer: 65536 });
+      const version = String(stdout).match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+      if (version) return version;
+    } catch { /* fall through: unknown version */ }
+    return null;
+  }
+  try {
+    const { stdout } = await exec(executable, ['--version'], { timeout: 10000 });
+    return String(stdout).match(/\d+\.\d+\.\d+\.\d+/)?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 async function chromiumStatus(dir) {
   const targetVersion = chromiumEntry().browserVersion;
   try {
     const executable = fs.readFileSync(executableMarker(dir), 'utf8').trim();
-    const { stdout } = await exec(executable, ['--version'], { timeout: 5000, maxBuffer: 65536 });
-    const version = stdout.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+    const version = await probeVersion(executable);
     if (version) return { installed: true, executable, version, targetVersion, updateAvailable: version !== targetVersion };
   } catch { /* not installed or unusable */ }
   return { installed: false, executable: null, version: null, targetVersion, updateAvailable: true };
@@ -78,20 +123,27 @@ async function install(dir, onProgress) {
   try {
     const zip = path.join(tmp, 'chromium.zip');
     await downloadFile(downloadUrl(), zip, onProgress);
-    await exec('/usr/bin/unzip', ['-q', zip, '-d', staging], { timeout: 600000 });
+    await extractZip(zip, staging);
     const executable = findExecutable(staging);
     if (!executable) throw new Error('安装包中没有 Chromium');
     // Playwright's CfT archive may omit bundle resource seals. Do not repair
     // that by re-signing locally or claim Developer ID validation: transport
     // trust is HTTPS to the configured CDN, followed by a version check.
-    const { stdout } = await exec(executable, ['--version'], { timeout: 10000 });
-    if (!stdout.includes(chromiumEntry().browserVersion)) throw new Error('下载的内核版本不匹配');
-    // Keep the downloaded bundle unchanged, including its icon. Old
-    // kernels remain available until the new version is fully verified.
     const destination = path.join(browserRoot(dir), `${chromiumEntry().browserVersion}-${path.basename(staging).slice(9)}`);
     const relative = path.relative(staging, executable);
     fs.renameSync(staging, destination);
     const final = path.join(destination, relative);
+    // Verify the version from the final path: on Windows this reads the
+    // directory name, on macOS/Linux it runs --version on the unpacked binary.
+    const version = await probeVersion(final);
+    if (version !== chromiumEntry().browserVersion) {
+      // Never leave an unverified kernel behind: the next start would fail
+      // the same check and the size on disk would grow with every retry.
+      fs.rmSync(destination, { recursive: true, force: true });
+      throw new Error('下载的内核版本不匹配');
+    }
+    // Keep the downloaded bundle unchanged, including its icon. Old
+    // kernels remain available until the new version is fully verified.
     writePrivate(executableMarker(dir), final + '\n');
     onProgress?.({ done: 1, total: 1, pct: 100 });
     return final;
@@ -103,4 +155,4 @@ async function downloadChromium(dir, onProgress) {
   inProgress.set(dir, promise);
   try { return await promise; } finally { inProgress.delete(dir); }
 }
-module.exports = { chromiumStatus, downloadChromium, downloadUrl, executableMarker, browserRoot };
+module.exports = { chromiumStatus, downloadChromium, downloadUrl, executableMarker, browserRoot, probeVersion };
