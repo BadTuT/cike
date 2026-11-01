@@ -8,15 +8,19 @@
 
 ## Windows 版本说明
 
-当前正式发布仅提供 Apple 芯片版 macOS 安装包。维护者目前没有可用于完整测试的 Windows 设备，因此暂不合并和发布未经实际验证的 Windows 构建，避免提供无法确认能否安装、启动和更新的版本。
+上游主分支不接收 Windows 相关改动（安装包、打包流程与运行时修正均不合并），因此本分支是一条独立的 Windows 构建线：从 `v0.7.0` 拉出，只做 Windows 运行必需的最小修正与打包，不与上游争主线，也不改变 macOS 行为。
 
-当前已提交的 Windows 相关 Pull Request 不会被合并，包括 Windows 安装包、打包流程和相关运行时改动；这些改动可以保留在各自的独立分支中。
+本分支与上游的差异：
 
-需要 Windows 版本的用户请基于当前代码另行建立分支进行改造、构建和测试。暂不接受将这类改动合并到主分支，也不将其纳入正式发布。
+- **内核解压按平台回退**：Windows 没有 `unzip`，改为 `tar.exe`（Windows 10 1803+ 自带 bsdtar）→ `unzip` → PowerShell `Expand-Archive` 依次尝试；macOS/Linux 仍是原来的单一 `unzip` 路径。
+- **内核版本探测不再依赖 `chrome.exe --version` 的 stdout**：Windows 的 `chrome.exe` 是 GUI 子系统程序，不向 stdout 写任何内容，旧写法会让内核装好之后仍被判定为“未安装”，每启动一次就重下约 200 MB。Windows 改为从安装目录名取版本（`browsers/<version>-<suffix>/chrome-win64/chrome.exe`），PE 版本资源兜底。
+- **更新检查按平台匹配资产**：Windows 找 `CIKE-Setup-<版本>-x64.exe`，其次 `CIKE-<版本>-win-x64.zip`；点「下载并安装」会打开发布页，下载后覆盖安装（Windows 包未签名、安装目录由用户选择，原位替换会与 SmartScreen 和安装器冲突）。macOS 仍走 sha256 校验后的原位更新。某个平台还没发资产时会明确提示，而不是抛错。
+- **`LFB_UPDATE_REPO=owner/name` 可覆盖检查更新的仓库**：自建发行线不会去查上游的 Releases。
+- 新增 `electron-builder.yml`（asar + per-user NSIS 安装包）、`.github/workflows/release-win.yml` 与 `test/windows.test.js`（Windows 打包回归）。
 
+Windows 包未做代码签名，首次运行会出现 SmartScreen 提示。
 
-
-发布流程会检查应用图标、应用签名和 DMG 完整性，并提供 `SHA256SUMS.txt` 供核对下载文件。
+上游的 macOS 发布流程会检查应用图标、应用签名和 DMG 完整性，并提供 `SHA256SUMS.txt` 供核对下载文件。
 
 <p align="center">
   <a href="https://github.com/chainfix/cike/releases/latest">下载 macOS 版</a> ·
@@ -266,6 +270,28 @@ npm run test:desktop  # macOS 图形会话，使用临时目录测试
 ```
 
 测试覆盖页面/iframe/Dedicated Worker/Shared Worker/Service Worker一致性、Cookie/LocalStorage/IndexedDB/Cache/Service Worker隔离、沙盒参数、代理失效阻断、本地STUN UDP限制、SOCKS认证与响应完整性、凭据保护、升级转换和下载回归。测试仅使用临时环境与本地服务器，不调用真实账号或代理。
+
+### 打包 Windows 版
+
+```powershell
+npm ci
+
+npm run dist:win       # asar + NSIS 安装包 -> dist-installer\CIKE-Setup-<版本>-x64.exe
+npm run dist:win:dir   # 只出免安装目录 -> dist-installer\win-unpacked\，双击 CIKE.exe
+npm run test:win       # Windows 打包回归（解压回退、资产匹配、打包排除规则）
+```
+
+上游那套 `npm test` 是 POSIX 专用的（断言 `0700` 权限、调用 `ps`/`sips`、需要已下载的浏览器），在 Windows 上必然失败；Windows 分支的回归面在打包与平台分支，用 `npm run test:win` 覆盖，CI 里也只跑这个。
+
+安装包是 `electron-builder` 的 per-user NSIS：默认装到 `%LOCALAPPDATA%\Programs\CIKE` 所以不弹 UAC，可改安装目录、建开始菜单/桌面快捷方式、在「应用和功能」里卸载；卸载保留 `%USERPROFILE%\.local-fingerprint-browser` 里的环境和内核。支持静默安装：`CIKE-Setup-<版本>-x64.exe /S /D=D:\CIKE`。
+
+图标由 `electron/assets/icon.png` 生成：`npm run icon:ico`（需要 Pillow），生成的 `electron/assets/icon.ico` 已随仓库提供。
+
+自建发布线要把更新检查指向自己的仓库（否则 Windows 版会去查上游 Releases，永远拿不到安装包）：
+
+```powershell
+$env:LFB_UPDATE_REPO = 'owner/cike'
+```
 
 ## 能力范围
 
