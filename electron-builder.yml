@@ -1,0 +1,64 @@
+appId: com.chainfix.cike
+productName: CIKE
+copyright: Copyright © 2026 chainfix
+
+# 源码打成 app.asar：启动略快、目录不散落。Chromium 内核不进包，
+# 仍在设置页下载到用户数据目录（%USERPROFILE%\.local-fingerprint-browser）。
+asar: true
+compression: normal
+npmRebuild: false
+# 发布交给 .github/workflows/release-win.yml 的 action-gh-release，
+# 不让 builder 生成 latest.yml（本应用自己读 Releases API）。
+publish: null
+
+directories:
+  output: dist-installer
+  buildResources: electron/assets
+
+# 显式排除本地状态：data/ 是环境与代理数据，*.zip 是内核安装包，
+# 两者都可能出现在开发者的工作目录里，绝不能进安装包。
+files:
+  - '!test/**'
+  - '!docs/**'
+  - '!.github/**'
+  - '!.git/**'
+  - '!data/**'
+  - '!browsers/**'
+  - '!.browsers/**'
+  - '!dist/**'
+  - '!dist-installer/**'
+  - '!**/*.zip'
+  - '!**/*.log'
+  - '!**/*.map'
+  - '!**/.DS_Store'
+  - '!**/Thumbs.db'
+  - '!electron/assets/*.py'
+  - '!electron/assets/*.icns'
+  - '!electron/assets/logo-source.png'
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: electron/assets/icon.ico
+  requestedExecutionLevel: asInvoker
+  artifactName: CIKE-Setup-${version}-${arch}.exe
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: CIKE
+  uninstallDisplayName: CIKE
+  deleteAppDataOnUninstall: false
+  installerLanguages:
+    - zh_CN
+  language: '2052'
+  installerIcon: electron/assets/icon.ico
+  uninstallerIcon: electron/assets/icon.ico
+  installerHeaderIcon: electron/assets/icon.ico
+  artifactName: CIKE-Setup-${version}-${arch}.exe
