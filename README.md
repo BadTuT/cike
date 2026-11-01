@@ -287,7 +287,7 @@ npm run test:win       # Windows 打包回归（解压回退、资产匹配、�
 
 图标由 `electron/assets/icon.png` 生成：`npm run icon:ico`（需要 Pillow），生成的 `electron/assets/icon.ico` 已随仓库提供。
 
-自建发布线要把更新检查指向自己的仓库（否则 Windows 版会去查上游 Releases，永远拿不到安装包）：
+自建发布线要把更新检查指向自己的仓库：本分支默认已指向自己的发行仓库 `BadTuT/cike`（上游永远不发 Windows 资产，指向上游等于永远收不到更新），换仓库时用环境变量覆盖：
 
 ```powershell
 $env:LFB_UPDATE_REPO = 'owner/cike'
