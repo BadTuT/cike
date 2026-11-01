@@ -5,10 +5,13 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 const { execFile } = require('child_process');
-const { app } = require('electron');
+const { app, shell } = require('electron');
+const { installerNames, compare, pickInstaller } = require('./update-assets');
 
-const REPO = 'chainfix/cike';
-const compare = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+// Release repository that publishes the installers. Override with
+// LFB_UPDATE_REPO=owner/name when building your own distribution line, so a
+// self-hosted Windows build checks its own releases instead of upstream's.
+const REPO = process.env.LFB_UPDATE_REPO || 'chainfix/cike';
 
 function get(url, file) {
   return new Promise((resolve, reject) => {
@@ -22,27 +25,51 @@ function get(url, file) {
   });
 }
 
+/** Files that accompany an installer asset as the checksum manifest. */
+function supportsInPlaceInstall() {
+  return process.platform === 'darwin' && process.arch === 'arm64' && app.isPackaged;
+}
+
 async function checkUpdate() {
   const current = app.getVersion();
   const release = JSON.parse(await get(`https://api.github.com/repos/${REPO}/releases/latest`));
   const version = release.tag_name?.replace(/^v/, '');
   if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) throw new Error('更新版本格式无效');
-  const dmg = release.assets?.find(a => a.name === `CIKE-${version}-mac-arm64.dmg`);
-  const sums = release.assets?.find(a => a.name === 'SHA256SUMS.txt');
-  if (!dmg || !sums) throw new Error('最新版本缺少安装包或校验文件');
-  return { current, latest: version, available: compare(version, current) > 0, url: release.html_url, dmgUrl: dmg.browser_download_url, checksumUrl: sums.browser_download_url };
+  const installer = pickInstaller(release.assets, version);
+  const sums = release.assets?.find(a => a.name === 'SHA256SUMS.txt') || null;
+  // A release without an asset for this platform is not an error: another
+  // platform may have shipped first. Report it and let the UI explain.
+  return {
+    current,
+    latest: version,
+    available: compare(version, current) > 0,
+    url: release.html_url,
+    installerUrl: installer?.browser_download_url || null,
+    installerName: installer?.name || null,
+    checksumUrl: sums?.browser_download_url || null,
+    inPlace: supportsInPlaceInstall(),
+    dmgUrl: installer?.browser_download_url || null,
+  };
 }
 
 async function installUpdate() {
-  if (process.platform !== 'darwin' || process.arch !== 'arm64' || !app.isPackaged) throw new Error('在线更新仅支持已安装的 Apple 芯片版 CIKE');
   const info = await checkUpdate();
   if (!info.available) return info;
+  if (process.platform === 'win32') {
+    // Windows builds are unsigned and unpacked into a user-chosen folder, so an
+    // in-place swap would fight SmartScreen and the installer. Send the user to
+    // the release page instead; replacing the folder keeps profile data intact.
+    if (!info.installerUrl) throw new Error('该版本没有发布 Windows 安装包');
+    await shell.openExternal(info.url);
+    return { ...info, manual: true, message: '已在浏览器打开发布页：下载 Setup 安装包或 zip 覆盖当前目录后重启' };
+  }
+  if (!supportsInPlaceInstall()) throw new Error('在线更新仅支持已安装的 Apple 芯片版 CIKE');
+  if (!info.installerUrl || !info.checksumUrl) throw new Error('该版本未提供可自动安装的安装包或校验文件');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cike-update-'));
   const dmg = path.join(dir, 'update.dmg');
-  await get(info.checksumUrl);
   const expected = (await get(info.checksumUrl)).match(/^([a-f0-9]{64})\s+CIKE-[0-9.]+-mac-arm64\.dmg$/m)?.[1];
   if (!expected) throw new Error('更新校验文件无效');
-  await get(info.dmgUrl, dmg);
+  await get(info.installerUrl, dmg);
   const actual = crypto.createHash('sha256').update(fs.readFileSync(dmg)).digest('hex');
   if (actual !== expected) throw new Error('更新文件校验失败');
   const mount = path.join(dir, 'mount');
@@ -57,4 +84,4 @@ async function installUpdate() {
   app.relaunch({ execPath: path.join(target, 'Contents/MacOS/CIKE') });
   app.exit(0);
 }
-module.exports = { checkUpdate, installUpdate };
+module.exports = { checkUpdate, installUpdate, REPO };
